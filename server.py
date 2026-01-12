@@ -74,18 +74,22 @@ def list_tables() -> str:
         logger.error(f"Error listing tables: {e}")
         return f"Error: {str(e)}"
 
+import json
+
 @mcp.tool()
 def run_sql(query: str) -> str:
     """
     Executes a SELECT SQL query.
     IMPORTANT: Use legacy Oracle syntax (e.g., ROWNUM instead of OFFSET/FETCH).
     """
+    # 1. Security Check: Block destructive commands
     forbidden_pattern = re.compile(r'\b(drop|delete|truncate|update|insert|alter|grant|revoke|create|replace)\b', re.IGNORECASE)
     
     if forbidden_pattern.search(query):
         logger.warning(f"Blocked destructive query: {query}")
         return "DENIED: Destructive operations (DROP, DELETE, UPDATE, etc.) are strictly forbidden."
 
+    # 2. Execute Query
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
@@ -97,15 +101,30 @@ def run_sql(query: str) -> str:
                 columns = [col[0] for col in cursor.description]
                 rows = cursor.fetchall()
                 
-                output = [f"Columns: {', '.join(columns)}"]
-                for row in rows:
-                    output.append(str(row))
-                    
+                # Convert to List of Dicts for clean JSON (easier for AI to format as table)
+                # Only take top 50 to prevent overflow
+                result_data = []
+                for row in rows[:50]:
+                    # Handle types that aren't JSON serializable if needed (e.g. LOBs, Dates)
+                    # For now using str() for safety on complex types, but ideally keep native types for JSON
+                    row_dict = {}
+                    for i, col_name in enumerate(columns):
+                        val = row[i]
+                        # helper to make date/lob serializable
+                        if hasattr(val, 'read'): # LOB
+                            val = val.read()
+                        elif hasattr(val, 'isoformat'): # Date/Datetime
+                            val = val.isoformat()
+                        
+                        row_dict[col_name] = val
+                    result_data.append(row_dict)
+
                 limit_msg = ""
                 if len(rows) >= 50:
-                    limit_msg = "\n... (Output truncated to 50 rows)"
+                    limit_msg = " [Output truncated to 50 rows]"
                 
-                return "\n".join(output[:50]) + limit_msg
+                # Return strict JSON string
+                return json.dumps(result_data, default=str) + limit_msg
                 
     except oracledb.DatabaseError as e:
         error_obj, = e.args

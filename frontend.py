@@ -6,6 +6,7 @@ import sys
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from groq import Groq
+from datetime import datetime
 from dotenv import load_dotenv
 
 if sys.platform.startswith("win"):
@@ -27,7 +28,7 @@ client_ai = Groq(api_key=GROQ_API_KEY)
 SERVER_SCRIPT_PATH = "server.py" 
 
 st.set_page_config(page_title="Oracle 10g Chat", layout="wide")
-st.title("🤖 Oracle 10g Executor")
+st.title("🤖 Oracle 10g")
 
 
 async def run_mcp_interaction(user_query, chat_history):
@@ -57,8 +58,11 @@ async def run_mcp_interaction(user_query, chat_history):
                     }
                 })
 
-            system_instruction = """
+            # --- SYSTEM PROMPT ---
+            current_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            system_instruction = f"""
             You are an expert Oracle 10g Database Engineer Agent.
+            Current Date/Time: {current_date_str}
             
             YOUR WORKFLOW:
             1. ALWAYS looking for table names first if you don't know them (use `list_tables`).
@@ -71,6 +75,11 @@ async def run_mcp_interaction(user_query, chat_history):
             - NO XML tags.
             - Use LEGACY Oracle Syntax (ROWNUM, no OFFSET/FETCH).
             - Answer valid user questions directly based on data.
+            
+            FORMATTING PROTOCOL:
+            1. If data is a LIST of records (2+ rows) -> YOU MUST GENERATE A MARKDOWN TABLE.
+            2. If data is a SINGLE value (e.g. Count) -> Present as bold text.
+            3. If data is a SINGLE row -> List as Key-Value points.
             """
 
             messages = [{"role": "system", "content": system_instruction}]
@@ -140,25 +149,139 @@ async def run_mcp_interaction(user_query, chat_history):
             
             return "⚠️ Max iterations reached. The AI tried to solve it but got stuck in a loop."
 
-# --- UI ---
+# --- UI & STYLING ---
+st.markdown("""
+    <style>
+    /* Global Styling */
+    .main {
+        background-color: #f0f2f5; /* Light gray background like WhatsApp Web */
+        padding-top: 2rem;
+    }
+    
+    /* Hide Streamlit Default Elements */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    
+    /* Chat Bubble Styling */
+    .chat-container {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding-bottom: 100px;
+    }
+    
+    .chat-bubble {
+        padding: 10px 15px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+        max-width: 70%;
+        line-height: 1.5;
+        font-family: sans-serif;
+        position: relative;
+        word-wrap: break-word;
+    }
+    
+    .user-bubble {
+        background-color: #dcf8c6; /* WhatsApp Green */
+        color: #000;
+        align-self: flex-end;
+        border-top-right-radius: 0;
+        margin-left: auto;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    }
+    
+    .ai-bubble {
+        background-color: #ffffff; /* White */
+        color: #000;
+        align-self: flex-start;
+        border-top-left-radius: 0;
+        margin-right: auto;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    }
+    
+    .timestamp {
+        font-size: 0.7em;
+        color: #999;
+        margin-top: 5px;
+        text-align: right;
+    }
+    
+    /* Code block override inside bubbles */
+    .stCodeBlock {
+        background-color: #f8f8f8 !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# --- SIDEBAR ---
+with st.sidebar:
+    st.image("https://upload.wikimedia.org/wikipedia/commons/5/50/Oracle_logo.svg", width=150)
+    st.markdown("### 🤖 Oracle 10g")
+    st.markdown("---")
+    
+    st.success("🟢 System Online")
+    st.info(f"📅 Date: {datetime.now().strftime('%Y-%m-%d')}")
+    
+    st.markdown("---")
+    if st.button("🗑️ Clear Chat History", type="primary"):
+        st.session_state.messages = []
+        st.rerun()
+
+    st.markdown("---")
+    st.caption("v1.2.0 | Agentic Mode Active")
+
+# --- MAIN CHAT INTERFACE ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-for message in st.session_state.messages:
-    if message["role"] != "system":
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+# Container for chat messages
+chat_container = st.container()
 
-if prompt := st.chat_input("Enter natural language SQL command (e.g., show customers table)"):
+with chat_container:
+    # Use HTML to render bubbles
+    for message in st.session_state.messages:
+        role = message["role"]
+        content = message["content"]
+        
+        if role == "user":
+            st.markdown(f'''
+                <div class="chat-bubble user-bubble">
+                    {content}
+                </div>
+            ''', unsafe_allow_html=True)
+        elif role == "assistant":
+            # For assistant, we might want to render markdown properly
+            # Adding a wrapper div styling it as a bubble
+             with st.chat_message("assistant", avatar="🤖"):
+                st.markdown(content)
+        elif role == "tool":
+            with st.status(f"🛠️ Tool Output: {message['name']}", expanded=False):
+                st.code(content)
+
+# Input Area
+if prompt := st.chat_input("Ketik perintah SQL natural (cth: lihat tabel nasabah)"):
+    # Add User Message to State
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    
+    # Render User Message Immediately
+    with chat_container:
+        st.markdown(f'''
+            <div class="chat-bubble user-bubble">
+                {prompt}
+            </div>
+        ''', unsafe_allow_html=True)
 
-    with st.chat_message("assistant"):
-        with st.spinner("Processing..."):
-            try:
-                resp = asyncio.run(run_mcp_interaction(prompt, st.session_state.messages))
-                st.markdown(resp)
-                st.session_state.messages.append({"role": "assistant", "content": resp})
-            except Exception as e:
-                st.error(f"System Error: {e}")
+    # Process AI Response
+    with st.spinner("🤖 AI sedang berpikir..."):
+        try:
+            resp = asyncio.run(run_mcp_interaction(prompt, st.session_state.messages))
+            
+            # Add AI Message to State
+            st.session_state.messages.append({"role": "assistant", "content": resp})
+            
+            # Rerun to update the view properly
+            st.rerun()
+            
+        except Exception as e:
+            st.error(f"System Error: {e}")
