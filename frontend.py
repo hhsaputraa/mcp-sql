@@ -86,26 +86,67 @@ async def run_mcp_interaction(user_query, chat_history):
             messages.extend([msg for msg in chat_history if msg["role"] != "system"][-5:])
             messages.append({"role": "user", "content": user_query})
 
-            max_iterations = 5
+            # --- AGENTIC LOOP ---
+            max_iterations = 6
+            
+            # Model Hopping Strategy (User Defined)
+            # 1. Qwen -> 2. GPT-OSS-20B -> 3. GPT-OSS-120B -> 4. Qwen -> 5. GPT-OSS-20B -> 6. GPT-OSS-120B (Final Force)
+            model_sequence = [
+                "qwen/qwen3-32b", 
+                "openai/gpt-oss-20b", 
+                "openai/gpt-oss-120b",
+                "qwen/qwen3-32b",
+                "openai/gpt-oss-20b",
+                "openai/gpt-oss-120b"
+            ]
             
             for i in range(max_iterations):
+                # Select model for this iteration
+                current_model = model_sequence[i] if i < len(model_sequence) else model_sequence[0]
+                
+                # --- STEP 1 DISCOVERY ENFORCEMENT ---
+                if i == 0:
+                     messages.append({
+                        "role": "system",
+                        "content": "STEP 1 RULE: You MUST execute the 'list_tables' tool now. Do not assume table names. Check the schema first."
+                    })
+
+                # --- FINAL STEP LOGIC (The "Final Boss" Step) ---
+                if i == 5:
+                    st.toast("⚠️ Attempt 6/6: FINAL ATTEMPT with GPT-OSS-120B. Forcing Execution...", icon="🔥")
+                    print(f"\n--- [Step {i+1}] FINAL FORCE MODE: {current_model} ---")
+                    
+                    # Inject Strong Instruction
+                    messages.append({
+                        "role": "system", 
+                        "content": "CRITICAL: This is the LAST ATTEMPT. You have failed 5 times. Based on ALL previous context and errors, you MUST immediately synthesize the correct 'run_sql' command to answer the user. DO NOT Explain. DO NOT Apologize. JUST RUN THE SQL."
+                    })
+                
                 try:
+                    # Log active model
+                    if i != 5: # Don't double log the toast
+                        log_msg = f"Step {i+1}: AI Thinking with model [{current_model}]..."
+                        st.toast(log_msg, icon="🧠")
+                        print(f"\n--- [Step {i+1}] Model: {current_model} ---")
+
                     response = client_ai.chat.completions.create(
-                        model="qwen/qwen3-32b", 
+                        model=current_model, 
                         messages=messages,
                         tools=groq_tools,
                         tool_choice="auto",
                         temperature=0.3
                     )
                 except Exception as e:
-                    return f"Groq API Error: {e}"
+                    print(f"❌ Error with model {current_model}: {e}")
+                    # If a model fails (e.g. 404), we continue to the next iteration (next model)
+                    messages.append({"role": "system", "content": f"Previous model {current_model} failed with error: {str(e)}. Please retry."})
+                    continue
 
                 response_message = response.choices[0].message
                 tool_calls = response_message.tool_calls
 
                 if tool_calls:
-                    st.toast(f"Step {i+1}: AI is thinking/running tools...", icon="🤖")
-                    print(f"\n--- [Step {i+1}] AI Tool Request ---")
+                    print(f"--- [Step {i+1}] AI Tool Request ---")
                     
                     messages.append(response_message)
                     for tool_call in tool_calls:
@@ -141,7 +182,6 @@ async def run_mcp_interaction(user_query, chat_history):
                             "content": tool_output
                         })
                     
-                
                 else:
                     final_ans = response_message.content
                     print(f"\n--- [Final Answer] ---\n{final_ans}\n")
